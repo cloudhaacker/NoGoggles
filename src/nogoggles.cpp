@@ -231,6 +231,8 @@ struct Settings {
     double crosshairOpacity = 0.75; // 0.1 - 1.0
     int crosshairToggleKey = 0x76;  // F7
     bool messages = true;           // little on-screen notes ("Mouse look ON")
+    bool keepOnTop = true;          // NoGoggles window stays above the game's own window
+    bool autoFocusGame = true;      // keep the game "active" so the gamepad reaches it
     double smoothing = 0.0;         // 0 = none, 0.9 = very smooth
 };
 
@@ -403,6 +405,8 @@ static void ReloadLookSettings(Settings& cfg)
 {
     Settings fresh;
     LoadLookSection(fresh, "Look", "Crosshair");
+    fresh.keepOnTop = IniBool("Windows", "KeepNoGogglesOnTop", fresh.keepOnTop);
+    fresh.autoFocusGame = IniBool("Windows", "AutoFocusGame", fresh.autoFocusGame);
     if (g_profileSection[0]) LoadLookSection(fresh, g_profileSection, g_profileSection);
     // keep the display part, which only applies at startup
     fresh.windowX = cfg.windowX; fresh.windowY = cfg.windowY;
@@ -554,6 +558,167 @@ static intptr_t __stdcall CrosshairProc(HWND h, unsigned int msg, uintptr_t w, i
     return DefWindowProcA(h, msg, w, l);
 }
 
+// ---------------------------------------------------------------------------
+// Window juggling.
+// Games only read the gamepad while their OWN window is the active one, but
+// the picture you want to see is in the SteamVR (NoGoggles) window. So:
+//   - the NoGoggles window is kept "always on top", so it stays visible, and
+//   - the game's window is kept active behind it, so the gamepad works.
+// We only take focus back from SteamVR's own windows (or at game start),
+// never from other programs you switch to.
+// ---------------------------------------------------------------------------
+static bool NameIs(const char* path, const char* name)
+{
+    const char* base = path;
+    for (const char* p = path; *p; ++p) if (*p == '\\' || *p == '/') base = p + 1;
+    return StrIEq(base, name);
+}
+
+static bool ProcessName(unsigned long pid, char* out, unsigned long size)
+{
+    out[0] = 0;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+    if (!h) return false;
+    unsigned long n = size;
+    BOOL ok = QueryFullProcessImageNameA(h, 0, out, &n);
+    CloseHandle(h);
+    return ok != 0;
+}
+
+static bool IsSteamVRProcess(const char* path)
+{
+    const char* base = path;
+    for (const char* p = path; *p; ++p) if (*p == '\\' || *p == '/') base = p + 1;
+    char c0 = base[0], c1 = base[1];
+    if ((c0 == 'v' || c0 == 'V') && (c1 == 'r' || c1 == 'R')) return true; // vrcompositor, vrmonitor, vrdashboard, vrwebhelper...
+    return NameIs(path, "steam.exe") || NameIs(path, "steamwebhelper.exe");
+}
+
+// Does this process have SteamVR's game library loaded? That's how we spot VR games.
+static bool UsesOpenVR(unsigned long pid)
+{
+    HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid);
+    if (!h) return false;
+    static HMODULE mods[1024];
+    unsigned long needed = 0;
+    bool found = false;
+    if (K32EnumProcessModules(h, mods, sizeof mods, &needed)) {
+        unsigned long count = needed / sizeof(HMODULE);
+        if (count > 1024) count = 1024;
+        char name[128];
+        for (unsigned long i = 0; i < count && !found; ++i)
+            if (K32GetModuleBaseNameA(h, mods[i], name, sizeof name) && StrIEq(name, "openvr_api.dll")) found = true;
+    }
+    CloseHandle(h);
+    return found;
+}
+
+struct PidInfo { unsigned long pid; signed char kind; }; // kind: 0 other, 1 steamvr, 2 vr game
+static PidInfo g_pidCache[64];
+static int g_pidNext = 0;
+
+static int PidKind(unsigned long pid)
+{
+    for (const PidInfo& p : g_pidCache) if (p.pid == pid && pid) return p.kind;
+    char path[600];
+    int kind = 0;
+    if (ProcessName(pid, path, sizeof path)) {
+        if (IsSteamVRProcess(path)) kind = 1;
+        else if (UsesOpenVR(pid)) kind = 2;
+    }
+    g_pidCache[g_pidNext].pid = pid;
+    g_pidCache[g_pidNext].kind = (signed char)kind;
+    g_pidNext = (g_pidNext + 1) % 64;
+    return kind;
+}
+
+static unsigned long g_ourPid = 0;
+
+struct WindowScan {
+    HWND compositor = nullptr; long compositorArea = 0;
+    HWND game = nullptr; long gameArea = 0;
+};
+
+static BOOL __stdcall ScanWindow(HWND h, intptr_t param)
+{
+    WindowScan* scan = (WindowScan*)param;
+    if (!IsWindowVisible(h) || GetWindow(h, GW_OWNER)) return 1;
+    if (GetWindowLongPtrA(h, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return 1;
+    unsigned long pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (!pid || pid == g_ourPid) return 1;
+    RECT r;
+    if (!GetWindowRect(h, &r)) return 1;
+    long area = (r.right - r.left) * (r.bottom - r.top);
+    if (area < 200 * 200) return 1;
+    int kind = PidKind(pid);
+    if (kind == 1) {
+        char path[600];
+        if (ProcessName(pid, path, sizeof path) && NameIs(path, "vrcompositor.exe") && area > scan->compositorArea) {
+            scan->compositor = h; scan->compositorArea = area;
+        }
+    } else if (kind == 2 && area > scan->gameArea) {
+        scan->game = h; scan->gameArea = area;
+    }
+    return 1;
+}
+
+static void FocusWindow(HWND target)
+{
+    HWND fg = GetForegroundWindow();
+    unsigned long fgThread = fg ? GetWindowThreadProcessId(fg, nullptr) : 0;
+    unsigned long me = GetCurrentThreadId();
+    if (fgThread && fgThread != me) AttachThreadInput(me, fgThread, 1);
+    SetForegroundWindow(target);
+    if (fgThread && fgThread != me) AttachThreadInput(me, fgThread, 0);
+    if (GetForegroundWindow() != target) {
+        // Windows sometimes refuses; a tap of Alt unlocks it.
+        keybd_event(0x12, 0, 0, 0);
+        keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0);
+        SetForegroundWindow(target);
+    }
+}
+
+struct WindowJuggler {
+    HWND lastGame = nullptr;
+    HWND topmostDone = nullptr;
+
+    void Tick(const Settings& cfg)
+    {
+        if (!g_ourPid) g_ourPid = GetCurrentProcessId();
+        WindowScan scan;
+        EnumWindows(&ScanWindow, (intptr_t)&scan);
+
+        if (scan.compositor && cfg.keepOnTop) {
+            // re-applied every half second; the crosshair is lifted above it right after
+            SetWindowPos(scan.compositor, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            if (scan.compositor != topmostDone) Log(Text().s("[NoGoggles] NoGoggles window set to stay on top"));
+            topmostDone = scan.compositor;
+        } else if (scan.compositor && !cfg.keepOnTop && topmostDone) {
+            SetWindowPos(scan.compositor, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            topmostDone = nullptr;
+        }
+
+        if (!cfg.autoFocusGame || !scan.game) { lastGame = scan.game; return; }
+
+        HWND fg = GetForegroundWindow();
+        bool newGame = scan.game != lastGame;
+        lastGame = scan.game;
+        if (fg == scan.game) return;
+
+        bool stolenBySteamVR = false;
+        if (fg) {
+            unsigned long pid = 0;
+            GetWindowThreadProcessId(fg, &pid);
+            stolenBySteamVR = PidKind(pid) == 1;
+        }
+        if (newGame || stolenBySteamVR) {
+            FocusWindow(scan.game);
+            if (newGame) Log(Text().s("[NoGoggles] Found the game window and made it active"));
+        }
+    }
+};
+
 // The message box: dark rounded panel with white text, near the top of the view.
 static int g_toastFontPx = 32;
 
@@ -628,6 +793,7 @@ struct Crosshair {
         if (!h) { Log(Text().s("[NoGoggles] Couldn't create the crosshair window")); if (toast) DestroyWindow(toast); return; }
 
         int shownSize = -1, shownAlpha = -1; bool visible = false;
+        WindowJuggler juggler;
         int tick = 0;
         while (running) {
             MSG m;
@@ -659,6 +825,7 @@ struct Crosshair {
 
             if (++tick >= 30) { // about twice a second
                 tick = 0;
+                juggler.Tick(*cfg);
                 if (cfg->crosshair && !g_crosshairHidden) {
                     int n = cfg->crosshairSize;
                     int alpha = (int)(cfg->crosshairOpacity * 255);
@@ -761,7 +928,7 @@ public:
         crosshair.Start(&cfg);
         if (cfg.messages) Toast("NoGoggles ready  -  F8 mouse look,  F9 recenter,  hold F10 to quit");
 
-        Log(Text().s("[NoGoggles] v0.5 headset active. Window ").i(cfg.windowW).s("x").i(cfg.windowH)
+        Log(Text().s("[NoGoggles] v0.6 headset active. Window ").i(cfg.windowW).s("x").i(cfg.windowH)
                 .s(" at ").i(cfg.windowX).s(",").i(cfg.windowY).s(", FOV ").f(cfg.fovDegrees)
                 .s(xinputNote()));
         return vr::VRInitError_None;

@@ -23,6 +23,12 @@ CreateToolhelp32Snapshot
 Process32First
 Process32Next
 GetPrivateProfileSectionNamesA
+OpenProcess
+QueryFullProcessImageNameA
+K32EnumProcessModules
+K32GetModuleBaseNameA
+GetCurrentProcessId
+GetCurrentThreadId
 D
 cat > build/user32.def <<'D'
 LIBRARY user32.dll
@@ -48,6 +54,16 @@ SetWindowRgn
 FillRect
 GetDC
 ReleaseDC
+EnumWindows
+IsWindowVisible
+GetWindow
+GetWindowLongPtrA
+GetWindowThreadProcessId
+GetWindowRect
+GetForegroundWindow
+SetForegroundWindow
+AttachThreadInput
+keybd_event
 D
 cat > build/gdi32.def <<'D'
 LIBRARY gdi32.dll

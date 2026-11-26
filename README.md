@@ -45,7 +45,7 @@ Tested with: Psychonauts in the Rhombus of Ruin (Steam). Tried another game? Ope
 ## Known tips
 
 - If a game says **"HMD Tracking Error"**, adjust `HeadHeight` in the settings. 0.7 is right for Rhombus of Ruin.
-- Keep the game's own window focused (click it once) so your gamepad goes to the game. The squashed-looking game window is normal; play in the NoGoggles window.
+- Games only read the gamepad while their own window is active. NoGoggles handles this: it keeps its view on top and makes the game's window active behind it. If the gamepad stops responding, Alt+Tab to the game's window.
 - If SteamVR suggests switching to "Direct Display Mode", ignore it.
 
 ## How it works (for the curious)

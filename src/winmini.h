@@ -46,6 +46,17 @@ struct PROCESS_INFORMATION { HANDLE hProcess, hThread; unsigned long dwProcessId
 #define NULL_PEN 8
 #define CREATE_NO_WINDOW 0x08000000
 
+#define PROCESS_QUERY_INFORMATION 0x0400
+#define PROCESS_VM_READ 0x0010
+#define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
+#define GW_OWNER 4
+#define GWL_EXSTYLE (-20)
+#define HWND_NOTOPMOST ((HWND)(intptr_t)-2)
+#define SWP_NOSIZE 0x1
+#define SWP_NOMOVE 0x2
+#define KEYEVENTF_KEYUP 0x2
+typedef BOOL(__stdcall* WNDENUMPROC)(HWND, intptr_t);
+
 #define SM_CXSCREEN 0
 #define SM_CYSCREEN 1
 #define GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT 0x2
@@ -69,7 +80,23 @@ __declspec(dllimport) HANDLE __stdcall CreateToolhelp32Snapshot(unsigned long, u
 __declspec(dllimport) BOOL __stdcall Process32First(HANDLE, PROCESSENTRY32*);
 __declspec(dllimport) BOOL __stdcall Process32Next(HANDLE, PROCESSENTRY32*);
 __declspec(dllimport) unsigned long __stdcall GetPrivateProfileSectionNamesA(char*, unsigned long, const char*);
+__declspec(dllimport) HANDLE __stdcall OpenProcess(unsigned long, BOOL, unsigned long);
+__declspec(dllimport) BOOL __stdcall QueryFullProcessImageNameA(HANDLE, unsigned long, char*, unsigned long*);
+__declspec(dllimport) BOOL __stdcall K32EnumProcessModules(HANDLE, HMODULE*, unsigned long, unsigned long*);
+__declspec(dllimport) unsigned long __stdcall K32GetModuleBaseNameA(HANDLE, HMODULE, char*, unsigned long);
+__declspec(dllimport) unsigned long __stdcall GetCurrentProcessId();
+__declspec(dllimport) unsigned long __stdcall GetCurrentThreadId();
 // user32
+__declspec(dllimport) BOOL __stdcall EnumWindows(WNDENUMPROC, intptr_t);
+__declspec(dllimport) BOOL __stdcall IsWindowVisible(HWND);
+__declspec(dllimport) HWND __stdcall GetWindow(HWND, unsigned int);
+__declspec(dllimport) intptr_t __stdcall GetWindowLongPtrA(HWND, int);
+__declspec(dllimport) unsigned long __stdcall GetWindowThreadProcessId(HWND, unsigned long*);
+__declspec(dllimport) BOOL __stdcall GetWindowRect(HWND, RECT*);
+__declspec(dllimport) HWND __stdcall GetForegroundWindow();
+__declspec(dllimport) BOOL __stdcall SetForegroundWindow(HWND);
+__declspec(dllimport) BOOL __stdcall AttachThreadInput(unsigned long, unsigned long, BOOL);
+__declspec(dllimport) void __stdcall keybd_event(unsigned char, unsigned char, unsigned long, uintptr_t);
 __declspec(dllimport) int __stdcall FillRect(HDC, const RECT*, HGDIOBJ);
 __declspec(dllimport) HDC __stdcall GetDC(HWND);
 __declspec(dllimport) int __stdcall ReleaseDC(HWND, HDC);
