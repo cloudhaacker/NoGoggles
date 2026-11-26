@@ -1,0 +1,14 @@
+// Minimal stand-in so openvr_driver.h compiles without a C++ standard library.
+// NoGoggles never calls the std::string helpers in that header.
+#pragma once
+namespace std {
+class string {
+public:
+    string() {}
+    string(const char*) {}
+    string& operator=(const char*) { return *this; }
+    const char* c_str() const { return ""; }
+    bool empty() const { return true; }
+    unsigned long long size() const { return 0; }
+};
+}

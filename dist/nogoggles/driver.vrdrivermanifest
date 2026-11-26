@@ -1,0 +1,7 @@
+{
+	"alwaysActivate": true,
+	"name": "nogoggles",
+	"directory": "",
+	"resourceOnly": false,
+	"hmd_presence": [ "*.*" ]
+}
