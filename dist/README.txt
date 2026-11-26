@@ -1,6 +1,6 @@
 NoGoggles - play SteamVR games on your monitor, no headset
 ============================================================
-Made for Psychonauts in the Rhombus of Ruin (Steam version). Version 0.8.
+Made for Psychonauts in the Rhombus of Ruin (Steam version). Version 0.9.
 
 NoGoggles is a pretend headset for SteamVR. The game thinks a VR headset is
 plugged in, but the picture shows up in a normal window on your screen, with

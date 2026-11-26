@@ -748,7 +748,12 @@ struct WindowJuggler {
         EnumWindows(&ScanWindow, (intptr_t)&scan);
 
         compositor = scan.compositor;
-        if (scan.compositor && cfg.keepOnTop) {
+        bool wantTop = cfg.keepOnTop && scan.game; // only while a game is running
+        if (scan.compositor && !wantTop && (GetWindowLongPtrA(scan.compositor, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
+            SetWindowPos(scan.compositor, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            Log(Text().s("[NoGoggles] No game running - NoGoggles window no longer kept on top"));
+        }
+        if (scan.compositor && wantTop) {
             // Only when it isn't already "always on top" - re-applying it all the
             // time fights other popups (Discord etc.) and makes them flicker.
             if (!(GetWindowLongPtrA(scan.compositor, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
@@ -940,18 +945,49 @@ struct Crosshair {
     }
 };
 
-// Closing SteamVR the polite way: ask the SteamVR Status window to close,
-// the same as clicking its X.
-static void QuitSteamVR()
+static void RunHidden(const char* command)
 {
-    Log(Text().s("[NoGoggles] Quit key held - closing SteamVR"));
-    char cmd[] = "taskkill.exe /IM vrmonitor.exe";
+    char cmd[300];
+    int i = 0;
+    for (; command[i] && i < 299; ++i) cmd[i] = command[i];
+    cmd[i] = 0;
     STARTUPINFOA si; PROCESS_INFORMATION pi;
     memset(&si, 0, sizeof si); memset(&pi, 0, sizeof pi);
     si.cb = sizeof si;
     if (CreateProcessA(nullptr, cmd, nullptr, nullptr, 0, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 5000);
         CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
     }
+}
+
+// Closing SteamVR. This code runs inside SteamVR itself, so if we're still
+// running a few seconds after asking, SteamVR didn't close.
+//   1st try: ask the SteamVR Status window to close (same as clicking its X)
+//   2nd try: ask again
+//   last resort: force-close SteamVR's programs
+static volatile bool g_vrQuitStarted = false;
+
+static unsigned long __stdcall QuitSteamVRThread(void*)
+{
+    Log(Text().s("[NoGoggles] Closing SteamVR (asking nicely)"));
+    RunHidden("taskkill.exe /IM vrmonitor.exe");
+    Sleep(5000);
+    Log(Text().s("[NoGoggles] SteamVR still open - asking again"));
+    RunHidden("taskkill.exe /IM vrmonitor.exe");
+    Sleep(5000);
+    Log(Text().s("[NoGoggles] SteamVR still open - force-closing it"));
+    RunHidden("taskkill.exe /F /IM vrmonitor.exe /IM vrcompositor.exe /IM vrdashboard.exe /IM vrwebhelper.exe /IM vrstartup.exe");
+    Sleep(1500);
+    RunHidden("taskkill.exe /F /IM vrserver.exe"); // that's us - goes last
+    return 0;
+}
+
+static void QuitSteamVR()
+{
+    if (g_vrQuitStarted) return;
+    g_vrQuitStarted = true;
+    HANDLE t = CreateThread(nullptr, 0, &QuitSteamVRThread, nullptr, 0, nullptr);
+    if (t) CloseHandle(t);
 }
 
 // Close the game politely (like clicking its X), wait for it to go, then SteamVR.
@@ -1045,7 +1081,7 @@ public:
         crosshair.Start(&cfg);
         if (cfg.messages) Toast("NoGoggles ready  -  F8 mouse look,  F9 recenter,  hold F10 to quit");
 
-        Log(Text().s("[NoGoggles] v0.8 headset active. Window ").i(cfg.windowW).s("x").i(cfg.windowH)
+        Log(Text().s("[NoGoggles] v0.9 headset active. Window ").i(cfg.windowW).s("x").i(cfg.windowH)
                 .s(" at ").i(cfg.windowX).s(",").i(cfg.windowY).s(", FOV ").f(cfg.fovDegrees)
                 .s(xinputNote()));
         return vr::VRInitError_None;

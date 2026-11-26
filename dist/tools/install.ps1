@@ -1,6 +1,6 @@
 # NoGoggles installer: copies the driver into your user folder and tells SteamVR about it.
 $ErrorActionPreference = 'Stop'
-$version = '0.8'
+$version = '0.9'
 
 # If anything goes wrong, show it and wait, instead of the window vanishing.
 trap { Write-Host ""; Write-Host "PROBLEM: $_" -ForegroundColor Red; [void](Read-Host 'Press Enter to close'); exit 1 }
