@@ -1,6 +1,6 @@
 NoGoggles - play SteamVR games on your monitor, no headset
 ============================================================
-Made for Psychonauts in the Rhombus of Ruin (Steam version). Version 0.7.
+Made for Psychonauts in the Rhombus of Ruin (Steam version). Version 0.8.
 
 NoGoggles is a pretend headset for SteamVR. The game thinks a VR headset is
 plugged in, but the picture shows up in a normal window on your screen, with
@@ -55,12 +55,15 @@ Controls (all of them can be changed):
   Right stick        turn your head
   Click right stick  look straight ahead again (R3)
   Click left stick   hide/show the center dot (L3)
-  Hold Back+Start    close SteamVR when you're done
+  Hold Back+Start    close the game and SteamVR
   Arrow keys         turn your head
   F8                 mouse look on/off (holds the pointer in place while on)
   F9                 snap back to looking straight ahead
   F7                 hide/show the center dot
-  Hold F10 (1 sec)   close SteamVR after you quit the game
+  Hold F10           close the game and SteamVR
+
+Quitting from the game's own menu also works: SteamVR closes by itself
+a few seconds later.
 
 A short message appears at the top of the screen when you use these keys,
 so you know it worked.

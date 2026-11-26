@@ -29,12 +29,14 @@ Uninstall from **Windows Settings > Apps > Installed apps > NoGoggles**.
 | Right stick | Turn your head |
 | Click right stick (R3) | Look straight ahead again |
 | Click left stick (L3) | Hide/show the center dot |
-| Hold Back + Start | Close SteamVR when you're done |
+| Hold Back + Start | Close the game and SteamVR |
 | Arrow keys | Turn your head |
 | F8 | Mouse look on/off |
 | F9 | Look straight ahead again |
 | F7 | Hide/show the center dot |
-| Hold F10 | Close SteamVR when you're done |
+| Hold F10 | Close the game and SteamVR |
+
+Quitting from the game's own menu works too: SteamVR closes itself a few seconds later.
 
 The game's own buttons work as normal on your gamepad. Everything can be changed in **NoGoggles Settings** (there's a shortcut on your desktop), including per-game settings.
 

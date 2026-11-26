@@ -64,6 +64,8 @@ GetForegroundWindow
 SetForegroundWindow
 AttachThreadInput
 keybd_event
+PostMessageA
+IsWindow
 D
 cat > build/gdi32.def <<'D'
 LIBRARY gdi32.dll

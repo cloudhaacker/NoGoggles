@@ -33,6 +33,7 @@ struct PROCESS_INFORMATION { HANDLE hProcess, hThread; unsigned long dwProcessId
 #define WS_EX_LAYERED 0x80000
 #define WS_EX_NOACTIVATE 0x08000000
 #define WM_PAINT 0x000F
+#define WM_CLOSE 0x0010
 #define WM_NCHITTEST 0x0084
 #define HTTRANSPARENT (-1)
 #define PM_REMOVE 1
@@ -88,6 +89,8 @@ __declspec(dllimport) unsigned long __stdcall K32GetModuleBaseNameA(HANDLE, HMOD
 __declspec(dllimport) unsigned long __stdcall GetCurrentProcessId();
 __declspec(dllimport) unsigned long __stdcall GetCurrentThreadId();
 // user32
+__declspec(dllimport) BOOL __stdcall PostMessageA(HWND, unsigned int, uintptr_t, intptr_t);
+__declspec(dllimport) BOOL __stdcall IsWindow(HWND);
 __declspec(dllimport) BOOL __stdcall EnumWindows(WNDENUMPROC, intptr_t);
 __declspec(dllimport) BOOL __stdcall IsWindowVisible(HWND);
 __declspec(dllimport) HWND __stdcall GetWindow(HWND, unsigned int);

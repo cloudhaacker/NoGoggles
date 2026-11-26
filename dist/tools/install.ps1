@@ -1,6 +1,6 @@
 # NoGoggles installer: copies the driver into your user folder and tells SteamVR about it.
 $ErrorActionPreference = 'Stop'
-$version = '0.7'
+$version = '0.8'
 
 # If anything goes wrong, show it and wait, instead of the window vanishing.
 trap { Write-Host ""; Write-Host "PROBLEM: $_" -ForegroundColor Red; [void](Read-Host 'Press Enter to close'); exit 1 }
@@ -49,6 +49,15 @@ if ($keepIni) {
         if ($line -match '^\s*\[(.+)\]\s*$') { $sec = $matches[1]; $oldLines[$sec] = New-Object System.Collections.ArrayList }
         elseif ($sec -and $line -match '^\s*([A-Za-z0-9]+)\s*=\s*(.*)$') { $old["$sec|$($matches[1])"] = $matches[2] }
         if ($sec) { [void]$oldLines[$sec].Add($line) }
+    }
+    # Settings whose default changed in a later version. If your old file still
+    # has the OLD default, you never changed it, so you get the new default.
+    $oldDefaults = @{
+        'Look|RecenterGamepadButton' = 'none'
+        'Look|HeadHeight'            = '0'
+    }
+    foreach ($k in $oldDefaults.Keys) {
+        if ($old.ContainsKey($k) -and ($old[$k].Trim() -ieq $oldDefaults[$k])) { $old.Remove($k) }
     }
     # Walk the new file, swapping in your old values.
     $newSections = @{}; $sec = ''

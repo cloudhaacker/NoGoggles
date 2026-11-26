@@ -254,6 +254,8 @@ struct Settings {
     bool messages = true;           // little on-screen notes ("Mouse look ON")
     bool keepOnTop = true;          // NoGoggles window stays above the game's own window
     bool autoFocusGame = true;      // keep the game "active" so the gamepad reaches it
+    bool closeWithGame = true;      // close SteamVR when the game closes
+    int gameRecenterPad = 0x0020;   // the game's OWN recenter button (Back in Rhombus of Ruin)
     double smoothing = 0.0;         // 0 = none, 0.9 = very smooth
 };
 
@@ -322,6 +324,7 @@ static void LoadLookSection(Settings& s, const char* look, const char* cross)
     s.crosshairToggleKey = IniKey(cross, "ToggleKey", s.crosshairToggleKey);
     s.crosshairTogglePad = IniPad(cross, "ToggleGamepadButton", s.crosshairTogglePad);
     s.quitPad = IniPad(look, "QuitGamepadButtons", s.quitPad);
+    s.gameRecenterPad = IniPad(look, "GameRecenterButton", s.gameRecenterPad);
     s.messages = IniBool(look, "OnScreenMessages", s.messages);
     s.predictTurning = IniBool(look, "PredictTurning", s.predictTurning);
     s.crosshair = IniBool(cross, "Show", s.crosshair);
@@ -430,6 +433,7 @@ static void ReloadLookSettings(Settings& cfg)
     LoadLookSection(fresh, "Look", "Crosshair");
     fresh.keepOnTop = IniBool("Windows", "KeepNoGogglesOnTop", fresh.keepOnTop);
     fresh.autoFocusGame = IniBool("Windows", "AutoFocusGame", fresh.autoFocusGame);
+    fresh.closeWithGame = IniBool("Windows", "CloseSteamVRWithGame", fresh.closeWithGame);
     if (g_profileSection[0]) LoadLookSection(fresh, g_profileSection, g_profileSection);
     // keep the display part, which only applies at startup
     fresh.windowX = cfg.windowX; fresh.windowY = cfg.windowY;
@@ -725,8 +729,15 @@ static bool IsBelow(HWND w, HWND other)
     return false;
 }
 
+static volatile HWND g_gameWindow = nullptr;
+static void QuitSteamVR();
+static void QuitEverything();
+
 struct WindowJuggler {
     HWND compositor = nullptr;
+    bool sawGame = false;
+    int goneTicks = 0;
+    bool autoClosed = false;
     HWND lastGame = nullptr;
     HWND topmostDone = nullptr;
 
@@ -748,6 +759,19 @@ struct WindowJuggler {
         } else if (scan.compositor && !cfg.keepOnTop && topmostDone) {
             SetWindowPos(scan.compositor, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             topmostDone = nullptr;
+        }
+
+        g_gameWindow = scan.game;
+
+        // --- game closed? then close SteamVR too, instead of leaving its empty room up
+        if (scan.game) { sawGame = true; goneTicks = 0; }
+        else if (sawGame && cfg.closeWithGame && !autoClosed) {
+            if (++goneTicks >= 10) { // gone for ~5 seconds (gives launchers time to hand over)
+                autoClosed = true;
+                Log(Text().s("[NoGoggles] Game closed - closing SteamVR"));
+                if (cfg.messages) Toast("Game closed - closing SteamVR");
+                QuitSteamVR();
+            }
         }
 
         if (!cfg.autoFocusGame || !scan.game) { lastGame = scan.game; return; }
@@ -930,6 +954,31 @@ static void QuitSteamVR()
     }
 }
 
+// Close the game politely (like clicking its X), wait for it to go, then SteamVR.
+// Doing it in this order avoids SteamVR's "close the running game?" box, which
+// can't be answered with a controller.
+static volatile bool g_quitting = false;
+
+static unsigned long __stdcall QuitThread(void*)
+{
+    HWND game = g_gameWindow;
+    if (game && IsWindow(game)) {
+        Log(Text().s("[NoGoggles] Closing the game first"));
+        PostMessageA(game, WM_CLOSE, 0, 0);
+        for (int i = 0; i < 100 && IsWindow(game); ++i) Sleep(100); // up to 10 seconds
+    }
+    QuitSteamVR();
+    return 0;
+}
+
+static void QuitEverything()
+{
+    if (g_quitting) return;
+    g_quitting = true;
+    HANDLE t = CreateThread(nullptr, 0, &QuitThread, nullptr, 0, nullptr);
+    if (t) CloseHandle(t);
+}
+
 // ---------------------------------------------------------------------------
 // The headset
 // ---------------------------------------------------------------------------
@@ -951,6 +1000,13 @@ public:
     POINT anchor = {0, 0};
     Crosshair crosshair;
     bool crossWasDown = false;
+    // The game's own recenter (Back in Rhombus) treats wherever the head is as
+    // the new "floor-level" origin, which puts us at height 0 = tracking error.
+    // After it fires we raise the head by HeadHeight again so it's back at the
+    // right height above the game's new origin.
+    double extraHeight = 0;
+    bool gameRecenterWasDown = false;
+    double gameRecenterTimer = -1;
     double quitHeld = 0;
     bool quitSent = false, quitWarned = false;
     vr::VRInputComponentHandle_t proximity = 0;
@@ -989,7 +1045,7 @@ public:
         crosshair.Start(&cfg);
         if (cfg.messages) Toast("NoGoggles ready  -  F8 mouse look,  F9 recenter,  hold F10 to quit");
 
-        Log(Text().s("[NoGoggles] v0.7 headset active. Window ").i(cfg.windowW).s("x").i(cfg.windowH)
+        Log(Text().s("[NoGoggles] v0.8 headset active. Window ").i(cfg.windowW).s("x").i(cfg.windowH)
                 .s(" at ").i(cfg.windowX).s(",").i(cfg.windowY).s(", FOV ").f(cfg.fovDegrees)
                 .s(xinputNote()));
         return vr::VRInitError_None;
@@ -1027,7 +1083,7 @@ public:
         pose.qRotation.y = sy * cp;
         pose.qRotation.z = -sy * sp;
 
-        pose.vecPosition[1] = cfg.headHeight;
+        pose.vecPosition[1] = cfg.headHeight + extraHeight;
         pose.poseIsValid = true;
         pose.deviceIsConnected = true;
         pose.result = vr::TrackingResult_Running_OK;
@@ -1141,13 +1197,31 @@ public:
         // --- hold the quit key for a second to close SteamVR
         if (KeyDown(cfg.quitKey) || (havePad && PadAll(pad, cfg.quitPad))) {
             quitHeld += dt;
-            if (!quitWarned && quitHeld > 0.3) { quitWarned = true; if (cfg.messages) Toast("Keep holding to close SteamVR..."); }
-            if (quitHeld > 1.5 && !quitSent) { quitSent = true; if (cfg.messages) Toast("Closing SteamVR"); QuitSteamVR(); }
+            if (!quitWarned && quitHeld > 0.3) { quitWarned = true; if (cfg.messages) Toast(g_gameWindow ? "Keep holding to close the game and SteamVR..." : "Keep holding to close SteamVR..."); }
+            if (quitHeld > 1.5 && !quitSent) {
+                quitSent = true;
+                if (cfg.messages) Toast(g_gameWindow ? "Closing the game and SteamVR" : "Closing SteamVR");
+                QuitEverything();
+            }
         } else {
             quitHeld = 0; quitSent = false; quitWarned = false;
         }
         bool prc = havePad && PadAll(pad, cfg.recenterPad);
         if (prc && !padRecenterWasDown) { yaw = 0; pitch = 0; shownYaw = 0; shownPitch = 0; if (cfg.messages) Toast("View recentered"); }
+
+        // --- the game's own recenter button
+        bool grc = havePad && PadAll(pad, cfg.gameRecenterPad);
+        if (grc && !gameRecenterWasDown) gameRecenterTimer = 0;
+        gameRecenterWasDown = grc;
+        if (gameRecenterTimer >= 0) {
+            gameRecenterTimer += dt;
+            if (gameRecenterTimer > 0.25) { // let the game grab the old position first
+                gameRecenterTimer = -1;
+                extraHeight += cfg.headHeight;
+                if (extraHeight > 50) extraHeight = cfg.headHeight; // never runs away
+                Log(Text().s("[NoGoggles] Game recentered - head lifted to stay at the right height"));
+            }
+        }
 
         // --- crosshair show/hide key
         bool ct = KeyDown(cfg.crosshairToggleKey) || (havePad && PadAll(pad, cfg.crosshairTogglePad));
