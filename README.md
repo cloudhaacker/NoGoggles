@@ -27,6 +27,9 @@ Uninstall from **Windows Settings > Apps > Installed apps > NoGoggles**.
 | Key / button | What it does |
 |---|---|
 | Right stick | Turn your head |
+| Click right stick (R3) | Look straight ahead again |
+| Click left stick (L3) | Hide/show the center dot |
+| Hold Back + Start | Close SteamVR when you're done |
 | Arrow keys | Turn your head |
 | F8 | Mouse look on/off |
 | F9 | Look straight ahead again |

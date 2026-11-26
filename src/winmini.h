@@ -50,6 +50,7 @@ struct PROCESS_INFORMATION { HANDLE hProcess, hThread; unsigned long dwProcessId
 #define PROCESS_VM_READ 0x0010
 #define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
 #define GW_OWNER 4
+#define GW_HWNDPREV 3
 #define GWL_EXSTYLE (-20)
 #define HWND_NOTOPMOST ((HWND)(intptr_t)-2)
 #define SWP_NOSIZE 0x1

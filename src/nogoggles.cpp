@@ -189,12 +189,31 @@ static const PadName kPadButtons[] = {
     {"DUp", 0x0001}, {"DDown", 0x0002}, {"DLeft", 0x0004}, {"DRight", 0x0008},
 };
 
-static int ParsePad(const char* p, int fallback)
+static int ParseOnePad(const char* p, int fallback)
 {
     while (*p == ' ' || *p == '\t') ++p;
     for (const PadName& b : kPadButtons)
         if (StrIEq(p, b.name)) return b.bits;
     return fallback;
+}
+
+// "RS" or a combo like "Back+Start"
+static int ParsePad(const char* p, int fallback)
+{
+    int bits = 0;
+    char part[32];
+    while (*p) {
+        int n = 0;
+        while (*p && *p != '+' && n < 31) { if (*p != ' ') part[n++] = *p; ++p; }
+        part[n] = 0;
+        if (*p == '+') ++p;
+        if (n) {
+            int b = ParseOnePad(part, -1);
+            if (b < 0) return fallback;
+            bits |= b;
+        }
+    }
+    return bits;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +238,7 @@ struct Settings {
     bool keyboardLook = true;       // arrow keys / numpad 8-4-6-2
     double keyboardSpeed = 90.0;
     int recenterKey = 0x78;         // F9
-    int recenterPad = 0;            // optional pad button to recenter
+    int recenterPad = 0x0080;       // R3 (click the right stick)
     double maxPitch = 80.0;
     double headHeight = 0.7;        // metres above the floor (0.7 tested good in Rhombus of Ruin)
     bool predictTurning = true;     // send turning speed so SteamVR can predict
@@ -230,6 +249,8 @@ struct Settings {
     int crosshairSize = 10;         // pixels
     double crosshairOpacity = 0.75; // 0.1 - 1.0
     int crosshairToggleKey = 0x76;  // F7
+    int crosshairTogglePad = 0x0040; // L3 (click the left stick)
+    int quitPad = 0x0030;           // Back+Start, held to close SteamVR
     bool messages = true;           // little on-screen notes ("Mouse look ON")
     bool keepOnTop = true;          // NoGoggles window stays above the game's own window
     bool autoFocusGame = true;      // keep the game "active" so the gamepad reaches it
@@ -299,6 +320,8 @@ static void LoadLookSection(Settings& s, const char* look, const char* cross)
     s.smoothing = Clamp(IniNum(look, "Smoothing", s.smoothing), 0.0, 0.98);
     s.quitKey = IniKey(look, "QuitKey", s.quitKey);
     s.crosshairToggleKey = IniKey(cross, "ToggleKey", s.crosshairToggleKey);
+    s.crosshairTogglePad = IniPad(cross, "ToggleGamepadButton", s.crosshairTogglePad);
+    s.quitPad = IniPad(look, "QuitGamepadButtons", s.quitPad);
     s.messages = IniBool(look, "OnScreenMessages", s.messages);
     s.predictTurning = IniBool(look, "PredictTurning", s.predictTurning);
     s.crosshair = IniBool(cross, "Show", s.crosshair);
@@ -511,6 +534,16 @@ static bool ReadPad(XInputGamepad& out)
     return false;
 }
 
+// every button in the combo is down
+static bool PadAll(const XInputGamepad& p, int bits)
+{
+    if (!bits) return false;
+    if ((bits & kPadLT) && p.lt <= 100) return false;
+    if ((bits & kPadRT) && p.rt <= 100) return false;
+    int b = bits & 0xFFFF;
+    return (p.buttons & b) == b;
+}
+
 static bool PadHeld(const XInputGamepad& p, int bits)
 {
     if (!bits) return false;
@@ -679,7 +712,21 @@ static void FocusWindow(HWND target)
     }
 }
 
+// Is window `w` underneath `other` in the stacking order?
+static bool IsBelow(HWND w, HWND other)
+{
+    if (!w || !other) return false;
+    HWND p = w;
+    for (int i = 0; i < 400; ++i) {
+        p = GetWindow(p, GW_HWNDPREV);
+        if (!p) return false;
+        if (p == other) return true;
+    }
+    return false;
+}
+
 struct WindowJuggler {
+    HWND compositor = nullptr;
     HWND lastGame = nullptr;
     HWND topmostDone = nullptr;
 
@@ -689,10 +736,14 @@ struct WindowJuggler {
         WindowScan scan;
         EnumWindows(&ScanWindow, (intptr_t)&scan);
 
+        compositor = scan.compositor;
         if (scan.compositor && cfg.keepOnTop) {
-            // re-applied every half second; the crosshair is lifted above it right after
-            SetWindowPos(scan.compositor, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            if (scan.compositor != topmostDone) Log(Text().s("[NoGoggles] NoGoggles window set to stay on top"));
+            // Only when it isn't already "always on top" - re-applying it all the
+            // time fights other popups (Discord etc.) and makes them flicker.
+            if (!(GetWindowLongPtrA(scan.compositor, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
+                SetWindowPos(scan.compositor, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                Log(Text().s("[NoGoggles] NoGoggles window set to stay on top"));
+            }
             topmostDone = scan.compositor;
         } else if (scan.compositor && !cfg.keepOnTop && topmostDone) {
             SetWindowPos(scan.compositor, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -793,6 +844,7 @@ struct Crosshair {
         if (!h) { Log(Text().s("[NoGoggles] Couldn't create the crosshair window")); if (toast) DestroyWindow(toast); return; }
 
         int shownSize = -1, shownAlpha = -1; bool visible = false;
+        int shownX = -99999, shownY = -99999, shownN = -1;
         WindowJuggler juggler;
         int tick = 0;
         while (running) {
@@ -821,7 +873,11 @@ struct Crosshair {
                 InvalidateRect(toast, nullptr, 1);
                 toastFrames = 110; // about two seconds
             }
-            if (toastFrames > 0 && --toastFrames == 0) ShowWindow(toast, SW_HIDE);
+            if (toastFrames > 0) {
+                if ((toastFrames & 7) == 0 && IsBelow(toast, juggler.compositor))
+                    SetWindowPos(toast, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                if (--toastFrames == 0) ShowWindow(toast, SW_HIDE);
+            }
 
             if (++tick >= 30) { // about twice a second
                 tick = 0;
@@ -838,8 +894,13 @@ struct Crosshair {
                     if (alpha != shownAlpha) { SetLayeredWindowAttributes(h, 0, (unsigned char)alpha, LWA_ALPHA); shownAlpha = alpha; }
                     int x = cfg->windowX + cfg->windowW / 2 - n / 2;
                     int y = cfg->windowY + cfg->windowH / 2 - n / 2;
-                    // keep it above the NoGoggles window, which also likes to be on top
-                    SetWindowPos(h, HWND_TOPMOST, x, y, n, n, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    bool moved = x != shownX || y != shownY || n != shownN || !visible;
+                    bool covered = IsBelow(h, juggler.compositor);
+                    if (moved || covered) {
+                        // lift it above the NoGoggles view only when it's actually hidden
+                        SetWindowPos(h, HWND_TOPMOST, x, y, n, n, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                        shownX = x; shownY = y; shownN = n;
+                    }
                     visible = true;
                 } else if (visible) {
                     ShowWindow(h, SW_HIDE);
@@ -891,7 +952,7 @@ public:
     Crosshair crosshair;
     bool crossWasDown = false;
     double quitHeld = 0;
-    bool quitSent = false;
+    bool quitSent = false, quitWarned = false;
     vr::VRInputComponentHandle_t proximity = 0;
     double proximityTimer = 0;
 
@@ -928,7 +989,7 @@ public:
         crosshair.Start(&cfg);
         if (cfg.messages) Toast("NoGoggles ready  -  F8 mouse look,  F9 recenter,  hold F10 to quit");
 
-        Log(Text().s("[NoGoggles] v0.6 headset active. Window ").i(cfg.windowW).s("x").i(cfg.windowH)
+        Log(Text().s("[NoGoggles] v0.7 headset active. Window ").i(cfg.windowW).s("x").i(cfg.windowH)
                 .s(" at ").i(cfg.windowX).s(",").i(cfg.windowY).s(", FOV ").f(cfg.fovDegrees)
                 .s(xinputNote()));
         return vr::VRInitError_None;
@@ -1078,17 +1139,18 @@ public:
         recenterWasDown = rc;
 
         // --- hold the quit key for a second to close SteamVR
-        if (KeyDown(cfg.quitKey)) {
+        if (KeyDown(cfg.quitKey) || (havePad && PadAll(pad, cfg.quitPad))) {
             quitHeld += dt;
-            if (quitHeld > 1.0 && !quitSent) { quitSent = true; QuitSteamVR(); }
+            if (!quitWarned && quitHeld > 0.3) { quitWarned = true; if (cfg.messages) Toast("Keep holding to close SteamVR..."); }
+            if (quitHeld > 1.5 && !quitSent) { quitSent = true; if (cfg.messages) Toast("Closing SteamVR"); QuitSteamVR(); }
         } else {
-            quitHeld = 0; quitSent = false;
+            quitHeld = 0; quitSent = false; quitWarned = false;
         }
-        bool prc = havePad && PadHeld(pad, cfg.recenterPad);
+        bool prc = havePad && PadAll(pad, cfg.recenterPad);
         if (prc && !padRecenterWasDown) { yaw = 0; pitch = 0; shownYaw = 0; shownPitch = 0; if (cfg.messages) Toast("View recentered"); }
 
         // --- crosshair show/hide key
-        bool ct = KeyDown(cfg.crosshairToggleKey);
+        bool ct = KeyDown(cfg.crosshairToggleKey) || (havePad && PadAll(pad, cfg.crosshairTogglePad));
         if (ct && !crossWasDown) {
             g_crosshairHidden = !g_crosshairHidden;
             if (cfg.messages) Toast(g_crosshairHidden ? "Crosshair hidden" : "Crosshair shown");
